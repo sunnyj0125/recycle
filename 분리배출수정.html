@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>슈퍼 분리배출 수호대! (지팡이 무한동력 버전) ♻️🪄</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Jua&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Jua', sans-serif; overflow: hidden; background: #f0fdf4; margin: 0; touch-action: none; }
+    .game-container { position: relative; width: 98vw; max-width: 1600px; aspect-ratio: 16 / 10; margin: 10px auto; border: 12px solid #fff; border-radius: 50px; overflow: hidden; background: #000; }
+    #webcam-video { transform: scaleX(-1); width: 100%; height: 100%; object-fit: cover; z-index: 10; }
+    
+    .bin { position: absolute; width: 180px; height: 230px; display: flex; flex-direction: column; align-items: center; justify-content: center; border-radius: 40px; color: white; font-weight: bold; z-index: 30; border: 6px solid rgba(255,255,255,0.6); }
+    .bin-label { margin-top: 10px; background: rgba(0,0,0,0.4); padding: 5px 25px; border-radius: 25px; font-size: 2.8rem; white-space: nowrap; }
+    
+    #bin-paper  { bottom: 30px; left: 30px; background: #3b82f6; }
+    #bin-plastic { bottom: 30px; right: 30px; background: #f59e0b; }
+    #bin-can    { top: 30px; right: 30px; background: #ef4444; }
+    #bin-glass  { top: 30px; left: 30px; background: #10b981; }
+    #bin-general { bottom: 30px; left: 50%; transform: translateX(-50%); background: #6b7280; width: 220px; }
+
+    .trash-item { position: absolute; font-size: 8rem; z-index: 50; filter: drop-shadow(0 15px 15px rgba(0,0,0,0.3)); pointer-events: none; transition: none; }
+    
+    #magic-wand { 
+      position: absolute; width: 160px; height: 160px; font-size: 140px; 
+      display: none; align-items: center; justify-content: center; z-index: 999; 
+      pointer-events: none; transform: scaleX(-1) rotate(-15deg) translate(25px, -80px); 
+      filter: drop-shadow(0 0 30px rgba(255, 255, 0, 1)); 
+    }
+
+    .ui-panel { background: white; padding: 12px 40px; border-radius: 25px; box-shadow: 0 6px 0 #eee; font-size: 2.5rem; font-weight: bold; }
+
+    /* 정답 효과 */
+    @keyframes pop-score {
+      0%   { opacity: 1; transform: translateY(0) scale(1); }
+      100% { opacity: 0; transform: translateY(-80px) scale(1.5); }
+    }
+    .score-pop { position: absolute; font-size: 4rem; color: #facc15; text-shadow: 0 0 20px #f59e0b; font-weight: bold; z-index: 200; pointer-events: none; animation: pop-score 0.7s ease-out forwards; }
+  </style>
+</head>
+<body>
+
+  <div class="w-full flex justify-between items-center px-10 py-5">
+    <div class="text-4xl text-green-700 font-bold">♻️ 슈퍼 분리배출 수호대</div>
+    <div class="flex gap-6">
+      <div class="ui-panel text-red-500">⏰ <span id="timer-display">30</span>초</div>
+      <div class="ui-panel text-yellow-500">⭐ <span id="score-display">0</span>점</div>
+    </div>
+  </div>
+
+  <div class="game-container" id="game-container">
+    <video id="webcam-video" autoplay playsinline></video>
+    
+    <div id="bin-paper"   class="bin">📦<div class="bin-label">종이</div></div>
+    <div id="bin-plastic" class="bin">🧴<div class="bin-label">플라스틱</div></div>
+    <div id="bin-can"     class="bin">🥫<div class="bin-label">캔/철</div></div>
+    <div id="bin-glass"   class="bin">🍾<div class="bin-label">유리</div></div>
+    <div id="bin-general" class="bin">🗑️<div class="bin-label">일반</div></div>
+
+    <div id="trash-layer"></div>
+    <div id="magic-wand">🪄</div>
+
+    <div id="start-overlay" class="absolute inset-0 bg-blue-900/70 z-[110] flex flex-col items-center justify-center text-white text-center">
+      <h1 class="text-7xl font-bold mb-6 text-yellow-300">무한 동력 지팡이!</h1>
+      <button onclick="startGame()" class="bg-white text-blue-900 px-20 py-10 rounded-full text-5xl font-bold shadow-2xl active:scale-95 transition-all">출동!</button>
+    </div>
+  </div>
+
+  <script>
+    const videoElement    = document.getElementById('webcam-video');
+    const trashLayer      = document.getElementById('trash-layer');
+    const magicWand       = document.getElementById('magic-wand');
+    const scoreDisplay    = document.getElementById('score-display');
+    const timerDisplay    = document.getElementById('timer-display');
+    const gameContainer   = document.getElementById('game-container');
+
+    let score = 0, timeLeft = 30, gameActive = false;
+    let currentTrash = null;   // 현재 화면에 있는 쓰레기 DOM
+    let isSpawning   = false;  // ★ 스폰 락: 중복 spawnTrash 방지
+    let wandX = 0, wandY = 0;
+
+    const trashItems = [
+      { img: '📦', type: 'paper'   }, { img: '📰', type: 'paper'   }, { img: '📜', type: 'paper'   },
+      { img: '🧴', type: 'plastic' }, { img: '🥤', type: 'plastic' }, { img: '🤖', type: 'plastic' }, { img: '🧱', type: 'plastic' },
+      { img: '🥫', type: 'can'     }, { img: '🔩', type: 'can'     }, { img: '🥄', type: 'can'     },
+      { img: '🍾', type: 'glass'   }, { img: '🏺', type: 'glass'   },
+      { img: '🧹', type: 'general' }, { img: '🩹', type: 'general' }, { img: '🧸', type: 'general' }, { img: '🧻', type: 'general' }
+    ];
+
+    /* ───── MediaPipe Pose ───── */
+    const pose = new Pose({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}` });
+    pose.setOptions({ modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+
+    pose.onResults((results) => {
+      if (!results.poseLandmarks) { magicWand.style.display = 'none'; return; }
+
+      const handL = results.poseLandmarks[15];
+      const handR = results.poseLandmarks[16];
+      const hand  = (handL.visibility > handR.visibility) ? handL : handR;
+
+      if (hand && hand.visibility > 0.5) {
+        wandX = (1 - hand.x) * 100;
+        wandY = hand.y * 100;
+
+        magicWand.style.display = 'flex';
+        magicWand.style.left = `${wandX}%`;
+        magicWand.style.top  = `${wandY}%`;
+
+        // ★ 'active' 상태인 쓰레기만 이동 및 충돌 검사
+        if (gameActive && currentTrash && currentTrash.dataset.status === 'active') {
+          moveTrash();
+          checkCollision();
+        }
+      } else {
+        magicWand.style.display = 'none';
+      }
+    });
+
+    new Camera(videoElement, {
+      onFrame: async () => { await pose.send({ image: videoElement }); },
+      width: 1280, height: 720
+    }).start();
+
+    /* ───── 쓰레기 이동 ───── */
+    function moveTrash() {
+      currentTrash.style.left = `${wandX - 10}%`;
+      currentTrash.style.top  = `${wandY - 15}%`;
+    }
+
+    /* ───── 충돌 검사 ───── */
+    function checkCollision() {
+      const tRect = currentTrash.getBoundingClientRect();
+      const binTypes = ['paper', 'plastic', 'can', 'glass', 'general'];
+
+      for (const type of binTypes) {
+        const bin   = document.getElementById(`bin-${type}`);
+        const bRect = bin.getBoundingClientRect();
+
+        const overlap = !(
+          tRect.right  < bRect.left   + 40 ||
+          tRect.left   > bRect.right  - 40 ||
+          tRect.bottom < bRect.top    + 40 ||
+          tRect.top    > bRect.bottom - 40
+        );
+
+        if (overlap && currentTrash.dataset.type === type) {
+          handleSuccess();
+          break;   // 한 번만 처리
+        }
+      }
+    }
+
+    /* ───── 성공 처리 ───── */
+    function handleSuccess() {
+      // ★ 상태를 즉시 'cleared'로 변경 → 이후 onResults에서 재진입 차단
+      currentTrash.dataset.status = 'cleared';
+
+      score += 10;
+      scoreDisplay.innerText = score;
+
+      // 점수 팝업
+      showScorePop();
+
+      // 쓰레기 사라지는 애니메이션
+      const oldTrash = currentTrash;
+      currentTrash = null;          // ★ 레퍼런스 즉시 해제
+
+      oldTrash.style.transition = 'transform 0.3s ease-in, opacity 0.3s ease-in';
+      oldTrash.style.transform  = 'scale(0) rotate(360deg)';
+      oldTrash.style.opacity    = '0';
+
+      setTimeout(() => {
+        oldTrash.remove();
+        spawnTrash();               // 제거 완료 후 다음 쓰레기 소환
+      }, 300);
+    }
+
+    /* ───── 점수 팝업 이펙트 ───── */
+    function showScorePop() {
+      const pop = document.createElement('div');
+      pop.className = 'score-pop';
+      pop.innerText = '+10 ⭐';
+      pop.style.left = `${wandX}%`;
+      pop.style.top  = `${wandY - 5}%`;
+      gameContainer.appendChild(pop);
+      setTimeout(() => pop.remove(), 700);
+    }
+
+    /* ───── 쓰레기 소환 ───── */
+    function spawnTrash() {
+      // ★ 세 가지 가드: 게임 종료 / 이미 쓰레기 있음 / 소환 진행 중
+      if (!gameActive || currentTrash || isSpawning) return;
+
+      isSpawning = true;
+
+      const item = trashItems[Math.floor(Math.random() * trashItems.length)];
+      const div  = document.createElement('div');
+      div.className       = 'trash-item';
+      div.innerText       = item.img;
+      div.style.left      = '45%';
+      div.style.top       = '35%';
+      div.dataset.type    = item.type;
+      div.dataset.status  = 'active';  // ★ 명시적 초기 상태
+
+      trashLayer.appendChild(div);
+      currentTrash = div;
+      isSpawning   = false;            // 락 해제
+    }
+
+    /* ───── 게임 시작 ───── */
+    function startGame() {
+      document.getElementById('start-overlay').style.display = 'none';
+      score    = 0;  scoreDisplay.innerText = '0';
+      timeLeft = 30; timerDisplay.innerText = '30';
+      gameActive = true;
+      isSpawning = false;
+      currentTrash = null;
+
+      spawnTrash();
+
+      const timer = setInterval(() => {
+        timeLeft--;
+        timerDisplay.innerText = timeLeft;
+        if (timeLeft <= 0) {
+          clearInterval(timer);
+          gameActive = false;
+          currentTrash = null;
+          setTimeout(() => {
+            alert(`게임 끝! 점수는 ${score}점이에요! 🎉`);
+            location.reload();
+          }, 200);
+        }
+      }, 1000);
+    }
+  </script>
+</body>
+</html>
