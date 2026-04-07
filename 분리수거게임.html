@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>슈퍼 분리배출 수호대! (장난감 & 일반쓰레기 추가) ♻️🪄</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Jua&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Jua', sans-serif; overflow: hidden; background: #f0fdf4; margin: 0; }
+    .game-container { position: relative; width: 98vw; max-width: 1600px; aspect-ratio: 16 / 10; margin: 10px auto; border: 12px solid #fff; border-radius: 50px; overflow: hidden; background: #000; box-shadow: 0 30px 60px rgba(0,0,0,0.2); }
+    #webcam-video { transform: scaleX(-1); width: 100%; height: 100%; object-fit: cover; z-index: 10; }
+    
+    /* 분리수거함 디자인 */
+    .bin { position: absolute; width: 180px; height: 230px; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 2rem; border-radius: 40px; color: white; font-weight: bold; z-index: 30; border: 6px solid rgba(255,255,255,0.6); }
+    
+    /* ⭐ 글자 크기 2배 확대 (2.8rem) */
+    .bin-label { margin-top: 10px; background: rgba(0,0,0,0.3); padding: 5px 25px; border-radius: 25px; font-size: 2.8rem; white-space: nowrap; }
+    
+    #bin-paper { bottom: 30px; left: 30px; background: #3b82f6; }
+    #bin-plastic { bottom: 30px; right: 30px; background: #f59e0b; }
+    #bin-can { top: 30px; right: 30px; background: #ef4444; }
+    #bin-glass { top: 30px; left: 30px; background: #10b981; }
+    /* ⭐ 일반쓰레기 통 추가 (중앙 하단) */
+    #bin-general { bottom: 30px; left: 50%; transform: translateX(-50%); background: #6b7280; width: 220px; }
+
+    .trash-item { position: absolute; font-size: 8rem; z-index: 50; filter: drop-shadow(0 15px 15px rgba(0,0,0,0.3)); pointer-events: none; }
+    
+    /* 🪄 멈추지 않는 마법 지팡이 */
+    #magic-wand { 
+      position: absolute; width: 160px; height: 160px; font-size: 140px; 
+      display: none; align-items: center; justify-content: center; z-index: 100; pointer-events: none; 
+      transform: scaleX(-1) rotate(-15deg) translate(25px, -80px); 
+      filter: drop-shadow(0 0 30px rgba(255, 255, 0, 1)); 
+    }
+
+    .ui-panel { background: white; padding: 12px 40px; border-radius: 25px; box-shadow: 0 6px 0 #eee; font-size: 2.5rem; font-weight: bold; }
+    .result-layer { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.9); z-index: 200; display: none; flex-direction: column; align-items: center; justify-content: center; color: white; backdrop-filter: blur(10px); }
+  </style>
+</head>
+<body class="flex flex-col items-center">
+
+  <div class="w-full max-w-7xl flex justify-between items-center px-10 py-5">
+    <div class="text-4xl text-green-700 font-bold">♻️ 슈퍼 분리배출 수호대 <span class="text-xl text-gray-400">| 장난감 구출 작전</span></div>
+    <div class="flex gap-6">
+      <div class="ui-panel text-red-500">⏰ <span id="timer-display">30</span>초</div>
+      <div class="ui-panel text-yellow-500">⭐ <span id="score-display">0</span>점</div>
+    </div>
+  </div>
+
+  <div class="game-container">
+    <video id="webcam-video" autoplay playsinline></video>
+    
+    <div id="bin-paper" class="bin">📦<div class="bin-label">종이</div></div>
+    <div id="bin-plastic" class="bin">🧴<div class="bin-label">플라스틱</div></div>
+    <div id="bin-can" class="bin">🥫<div class="bin-label">캔/철</div></div>
+    <div id="bin-glass" class="bin">🍾<div class="bin-label">유리</div></div>
+    <div id="bin-general" class="bin">🗑️<div class="bin-label">일반쓰레기</div></div>
+
+    <div id="trash-layer"></div>
+    <div id="magic-wand">🪄</div> 
+
+    <div id="start-overlay" class="absolute inset-0 bg-blue-900/50 z-[110] flex flex-col items-center justify-center text-white text-center">
+      <h1 class="text-7xl font-bold mb-6 text-yellow-300">장난감도 마법으로!</h1>
+      <p class="text-3xl mb-12 leading-relaxed">지팡이를 한 손으로 휘둘러서<br>30초 동안 마을을 깨끗하게 만들어요!</p>
+      <button onclick="startGame()" class="bg-white text-blue-900 px-20 py-10 rounded-full text-5xl font-bold shadow-2xl active:scale-95 transition-all">출동!</button>
+    </div>
+  </div>
+
+  <div id="result-overlay" class="result-layer">
+    <h1 class="text-7xl font-bold mb-4 text-yellow-400">최고예요! 🏆</h1>
+    <p class="text-5xl mb-12">마법 점수: <span id="final-score">0</span>점</p>
+    <button onclick="location.reload()" class="bg-green-500 text-white px-16 py-8 rounded-3xl text-4xl font-bold shadow-xl">한 번 더!</button>
+  </div>
+
+  <script>
+    const videoElement = document.getElementById('webcam-video');
+    const trashLayer = document.getElementById('trash-layer');
+    const scoreDisplay = document.getElementById('score-display');
+    const timerDisplay = document.getElementById('timer-display');
+    const magicWand = document.getElementById('magic-wand');
+
+    let score = 0, timeLeft = 30, gameActive = false, currentTrash = null, gameTimer = null;
+
+    // 🧸 장난감 및 다양한 아이템 추가 (총 25종)
+    const trashItems = [
+      { img: '📦', type: 'paper' }, { img: '📰', type: 'paper' }, { img: '📜', type: 'paper' },
+      { img: '🧴', type: 'plastic' }, { img: '🥤', type: 'plastic' }, { img: '🍱', type: 'plastic' },
+      { img: '🥫', type: 'can' }, { img: '🔩', type: 'can' }, { img: '🥄', type: 'can' },
+      { img: '🍾', type: 'glass' }, { img: '🍷', type: 'glass' }, { img: '🍶', type: 'glass' },
+      // 일반쓰레기
+      { img: '🧹', type: 'general' }, { img: '🩹', type: 'general' }, { img: '🚬', type: 'general' }, { img: '🧻', type: 'general' }, { img: '👞', type: 'general' },
+      // 장난감 시리즈 (재질에 따라 분류)
+      { img: '🧸', type: 'general' }, // 인형은 일반쓰레기
+      { img: '🧱', type: 'plastic' }, // 블록은 플라스틱
+      { img: '🤖', type: 'plastic' }, // 로봇은 플라스틱
+      { img: '🎮', type: 'plastic' }, // 게임기는 플라스틱
+      { img: '🪁', type: 'general' }, // 방패 연은 일반쓰레기
+      { img: '🚂', type: 'plastic' }, // 기차 장난감은 플라스틱
+      { img: '🥁', type: 'general' }, // 장난감 북은 일반쓰레기
+      { img: '🎠', type: 'plastic' }  // 목마 장난감은 플라스틱
+    ];
+
+    const pose = new Pose({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}` });
+    pose.setOptions({ modelComplexity: 1, minDetectionConfidence: 0.6 });
+    pose.onResults(onResults);
+
+    new Camera(videoElement, { onFrame: async () => { await pose.send({image: videoElement}); }, width: 1280, height: 720 }).start();
+
+    function onResults(results) {
+      if (!results.poseLandmarks) {
+        magicWand.style.display = 'none';
+        return;
+      }
+      
+      const handL = results.poseLandmarks[15];
+      const handR = results.poseLandmarks[16];
+      const bestHand = (handL.visibility > handR.visibility) ? handL : handR;
+
+      if (bestHand && bestHand.visibility > 0.6) {
+        magicWand.style.display = 'flex';
+        const posX = (1 - bestHand.x) * 100;
+        const posY = bestHand.y * 100;
+        magicWand.style.left = `${posX}%`;
+        magicWand.style.top = `${posY}%`;
+        
+        if (gameActive && currentTrash && currentTrash.dataset.status === 'active') {
+          currentTrash.style.left = `${posX - 10}%`;
+          currentTrash.style.top = `${posY - 15}%`;
+          checkCollision();
+        }
+      } else {
+        magicWand.style.display = 'none';
+      }
+    }
+
+    function checkCollision() {
+      if (!currentTrash) return;
+      const binTypes = ['paper', 'plastic', 'can', 'glass', 'general'];
+      binTypes.forEach(type => {
+        const bin = document.getElementById(`bin-${type}`);
+        const bRect = bin.getBoundingClientRect(), tRect = currentTrash.getBoundingClientRect();
+        
+        if (!(tRect.right < bRect.left + 40 || tRect.left > bRect.right - 40 || 
+              tRect.bottom < bRect.top + 40 || tRect.top > bRect.bottom - 40)) {
+          if (currentTrash.dataset.type === type) handleSuccess();
+        }
+      });
+    }
+
+    function handleSuccess() {
+      if (!currentTrash || currentTrash.dataset.status !== 'active') return;
+      currentTrash.dataset.status = 'cleared';
+      score += 10;
+      scoreDisplay.innerText = score;
+      
+      currentTrash.style.transform = 'scale(0) rotate(720deg)';
+      currentTrash.style.transition = 'all 0.4s ease-in';
+      
+      const oldTrash = currentTrash;
+      currentTrash = null; 
+      
+      setTimeout(() => {
+        oldTrash.remove();
+        if(gameActive) spawnTrash(); 
+      }, 400);
+    }
+
+    function spawnTrash() {
+      if (!gameActive || currentTrash) return;
+      const item = trashItems[Math.floor(Math.random() * trashItems.length)];
+      const div = document.createElement('div');
+      div.className = 'trash-item';
+      div.innerText = item.img;
+      div.style.left = '45%'; div.style.top = '35%';
+      div.dataset.type = item.type;
+      div.dataset.status = 'active';
+      trashLayer.appendChild(div);
+      currentTrash = div;
+    }
+
+    function startGame() {
+      document.getElementById('start-overlay').style.display = 'none';
+      trashLayer.innerHTML = '';
+      currentTrash = null;
+      score = 0; scoreDisplay.innerText = '0';
+      timeLeft = 30; timerDisplay.innerText = '30';
+      gameActive = true;
+      spawnTrash();
+      gameTimer = setInterval(() => {
+        timeLeft--;
+        timerDisplay.innerText = timeLeft;
+        if (timeLeft <= 0) endGame();
+      }, 1000);
+    }
+
+    function endGame() {
+      gameActive = false;
+      clearInterval(gameTimer);
+      if (currentTrash) currentTrash.remove();
+      currentTrash = null;
+      document.getElementById('final-score').innerText = score;
+      document.getElementById('result-overlay').style.display = 'flex';
+    }
+  </script>
+</body>
+</html>
